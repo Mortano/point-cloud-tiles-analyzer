@@ -1,0 +1,9 @@
+[package]
+name = "potree-node-counter"
+version = "1.0.0"
+authors = ["Pascal Bormann <pascal.bormann@igd.fraunhofer.de>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.33.3"
+anyhow = "1.0.35"
