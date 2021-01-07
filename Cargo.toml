@@ -1,5 +1,5 @@
 [package]
-name = "potree-node-counter"
+name = "point-cloud-tiles-analyzer"
 version = "1.0.0"
 authors = ["Pascal Bormann <pascal.bormann@igd.fraunhofer.de>"]
 edition = "2018"
@@ -7,3 +7,7 @@ edition = "2018"
 [dependencies]
 clap = "2.33.3"
 anyhow = "1.0.35"
+walkdir = "2.3.1"
+las = { version = "0.7.3", features = ["laz"] }
+signifix = "0.10.1"
+rayon = "1.5.0"
