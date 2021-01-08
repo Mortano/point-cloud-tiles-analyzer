@@ -1,4 +1,4 @@
-use crate::progress::ProgressUpdateCondition;
+use crate::{math::mean_and_std_deviation, progress::ProgressUpdateCondition};
 use anyhow::{anyhow, Result};
 use core::fmt::Display;
 use core::fmt::Formatter;
@@ -23,9 +23,9 @@ pub enum HistogramConfig {
     Linear(usize),
 }
 
-fn log_histogram(counts: &[usize], num_buckets: usize) -> Vec<HistogramBucket> {
+fn log_histogram(counts: &[usize], num_buckets: usize) -> Histogram {
     let max_points = match counts.last() {
-        None => return vec![],
+        None => return Histogram::new(vec![], 0.0, 0.0),
         Some(&max_points) => max_points,
     };
     let log_max_points = (1.0 + max_points as f64).log2();
@@ -52,12 +52,14 @@ fn log_histogram(counts: &[usize], num_buckets: usize) -> Vec<HistogramBucket> {
         ));
     }
 
-    buckets
+    let (mean, stddev) = mean_and_std_deviation(counts).unwrap();
+
+    Histogram::new(buckets, mean, stddev)
 }
 
-fn lin_histogram(counts: &[usize], num_buckets: usize) -> Vec<HistogramBucket> {
+fn lin_histogram(counts: &[usize], num_buckets: usize) -> Histogram {
     let max_points = match counts.last() {
-        None => return vec![],
+        None => return Histogram::new(vec![], 0.0, 0.0),
         Some(&max_points) => max_points,
     } + 1;
 
@@ -79,7 +81,9 @@ fn lin_histogram(counts: &[usize], num_buckets: usize) -> Vec<HistogramBucket> {
         ));
     }
 
-    buckets
+    let (mean, stddev) = mean_and_std_deviation(counts).unwrap();
+
+    Histogram::new(buckets, mean, stddev)
 }
 
 /// Bucket within a Histogram containing the number of nodes whose point counts fall within `range`
@@ -121,24 +125,46 @@ impl Display for HistogramBucket {
     }
 }
 
+#[derive(Debug)]
+pub struct Histogram {
+    buckets: Vec<HistogramBucket>,
+    mean: f64,
+    stddev: f64,
+}
+
+impl Histogram {
+    pub fn new(buckets: Vec<HistogramBucket>, mean: f64, stddev: f64) -> Self {
+        Self {
+            buckets,
+            mean,
+            stddev,
+        }
+    }
+}
+
+impl Display for Histogram {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        writeln!(fmt, "Buckets:")?;
+        for bucket in self.buckets.iter() {
+            writeln!(fmt, "{}", bucket)?;
+        }
+        writeln!(fmt, "Mean: {:.2}", self.mean)?;
+        writeln!(fmt, "σ: {:.2}", self.stddev)
+    }
+}
+
 /// Result of the `Analyzer`
 pub enum AnalyzerResult {
     /// The number of nodes in the dataset
     NodeCount(usize),
     /// A histogram of the point counts for each node
-    Histogram(Vec<HistogramBucket>),
+    Histogram(Histogram),
 }
 
 impl Display for AnalyzerResult {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
-            AnalyzerResult::Histogram(histogram) => {
-                writeln!(fmt, "Histogram:")?;
-                for bucket in histogram.iter() {
-                    writeln!(fmt, "{}", bucket)?;
-                }
-                Ok(())
-            }
+            AnalyzerResult::Histogram(histogram) => write!(fmt, "{}", histogram),
             AnalyzerResult::NodeCount(node_count) => {
                 writeln!(fmt, "Number of nodes: {}", node_count)
             }
@@ -195,24 +221,37 @@ impl MultiFileAnalyzer {
     }
 
     fn calculate_histogram(&self) -> Result<AnalyzerResult> {
-        let progress_chunk_size = 1024;
+        let chunk_size = 128;
         let mut progress_tracker = Arc::new(Mutex::new(ProgressTracker::new(
             (self.files.len() - 1) as f64,
             ProgressUpdateCondition::OnProgressChanged(1000.0),
         )));
 
-        let mut num_points_per_node = self
+        let num_points_per_node_nested = self
             .files
             .par_iter()
-            .map(move |file| -> Result<usize> {
-                let mut reader = Reader::from_path(file)?;
-                let header = reader.header();
-                let num_points = header.number_of_points() as usize;
+            .chunks(chunk_size)
+            .map(move |files| -> Result<Vec<usize>> {
+                let num_points = files
+                    .iter()
+                    .map(|&file| -> Result<usize> {
+                        let mut reader = Reader::from_path(file)?;
+                        let header = reader.header();
+                        Ok(header.number_of_points() as usize)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let mut progress = progress_tracker.lock().unwrap();
-                progress.inc_progress(1.0);
+                progress.inc_progress(chunk_size as f64);
+
                 Ok(num_points)
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        let mut num_points_per_node = num_points_per_node_nested
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
 
         // Generate histogram from num_points_per_node
         num_points_per_node.sort();

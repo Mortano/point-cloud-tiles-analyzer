@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::path::{Path, PathBuf};
 
 mod analyzer;
+mod math;
 mod progress;
 
 struct Config {
